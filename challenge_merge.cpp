@@ -63,11 +63,9 @@ class Ratio{
 class Slice{
 	public:
 		int sID;
-		int aidx;
 		int lastT;
-		Slice(int sid,int avail_idx,int lT){
+		Slice(int sid,int lT){
 			sID=sid;
-			aidx=avail_idx;
 			lastT=lT;
 		}
 }
@@ -221,7 +219,7 @@ bool insertBubble(list<emptySlot> &emptySlots, int *lastEmptyEnd, Job *Jobs, Ope
 void selectMinSlice(vector<int>& availaSlice,Operation *curOperation,Job* Jobs,int *eachSend){
 	vector<Slice> tmpSlice;
 	for(int i=0;i<availaSlice.size();i++){
-		Slice in_avail(availaSlice[i],i,eachSend[availaSlice[i]]);
+		Slice in_avail(availaSlice[i],eachSend[availaSlice[i]]);
 		tmpSlice.push_back(in_avail);
 	}
 	sort(tmpSlice.begin(),tmpSlice.end(),compSlice);
@@ -233,8 +231,18 @@ void selectMinSlice(vector<int>& availaSlice,Operation *curOperation,Job* Jobs,i
 	}
 	for(int i=0;i<curOperation->reqSlice;i++)
 		tmpSlice.pop_back();
-	for(int i=0;i<tmpSlice.size();i++)
-		availaSlice[i]=tmpSlice[i].sID;
+	for(int i=0;i<tmpSlice.size();i++){
+        int curSlice=tmpSlice[i].sID;
+		availaSlice[i]=curSlice;
+        // *lastEmptyEnd stores the latest end time of a slice (before scheduling curOperation) 
+		// update emptySlots linked list(if there is a gap) & lastEmptyEnd
+        if(maxlastT>lastEmptyEnd[curSlice]){
+            emptySlot newSlot;
+            newSlot.start = lastEmptyEnd[curSlice]; newSlot.end = maxlastT; newSlot.slice = curSlice;
+            emptySlots.push_back(newSlot);
+        }
+        lastEmptyEnd[curSlice] = maxlastT + curOperation.reqDuration;
+    }
 	availaSlice.resize(tmpSlice.size());
 	curOperation->startTime = maxlastT;
     Jobs[curOperation->JobID].ops[curOperation.OpID].startTime = maxlastT;
@@ -246,6 +254,8 @@ struct samejobComp
 {
     bool operator()(Operation const& a, Operation const& b)
     {
+        if (a.reqSlice == b.reqSlice)
+            return a.reqDuration < b.reqDuration;
         return a.reqSlice < b.reqSlice;
     }
 };
@@ -369,23 +379,34 @@ int main(){
 		        selectMinSlice(availaSlice,&curOperation,&Jobs,eachSend);
                 workingPQ[l].push(curOperation);
             }
-            
-	        //no need to insert, if prev has processed
-	        curOperation = workingPQ[l].top(); // step 3: get the first job in workingPQ done and get available slices
-	        Jobs[l].seq.push_back(curOperation.OpID);
+            // process op in the workingPQ, no need insertBubble
+	        curOperation = workingPQ.top(); // step 3: get the first job in workingPQ done and get available slices
+            Jobs[l].seq.push_back(curOperation);
             workingPQ[l].pop();
             jdoneOpNum[l] ++;
             curJobID = curOperation.JobID;
             curOpID = curOperation.OpID;
-            Jobs[curJobID].done[curOpID] = true; 
-	        //TODO: update eachSend
+            Jobs[curJobID].done[curOpID] = true;
             for(int si=0;si<curOperation.reqSlice;si++){
 	    	    eachSend[ curOperation.usedSlice[si] ]=curOperation.endTime;
-                availaSlice.push_back(curOperation.usedSlice[i]);
+                availaSlice.push_back(curOperation.usedSlice[si]);
                 printf("slice %d is available\n", curOperation.usedSlice[i]);
 	        }
 	        JobfinTime[l]=(JobfinTime[l]>curOperation.endTime)?JobfinTime[l]:curOperation.endTime;
-            int j = opOrderPointers[curJobID];
+            
+            // *update reqEndTime
+	        int j = opOrderPointers[curJobID];
+	        while(j < Jobs[curJobID].opNum){
+		        int nextOp = Jobs[curJobID].orders[j];
+		        for(int k = 0; k < Jobs[curJobID].ops[nextOp].reqOpNum; k++){
+			        if(Jobs[curJobID].ops[nextOp].reqOp[k] == curOpID && Jobs[curJobID].ops[nextOp].reqEndTime < curOperation.endTime){
+				        Jobs[curJobID].ops[nextOp].reqEndTime = curOperation.endTime;
+			        }
+		        }
+		        j++;
+	        }
+
+            j = opOrderPointers[curJobID];
             while(j < Jobs[curJobID].opNum){
                 int nextOp = Jobs[curJobID].orders[j];
                 bool available = true;
@@ -416,7 +437,7 @@ int main(){
     for(int i=1;i<=jobNum;i++){
         cout<<"ID "<<orderJob[i].ID<<" ratio "<<orderJob[i].ratio<<endl;
     }
-	
+	// 01.22 work to here
     int eachSend[sliceNum+1];
     for(int i=0;i<sliceNum;i++)
 	    eachSend[i]=0;
