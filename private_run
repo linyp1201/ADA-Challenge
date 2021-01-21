@@ -1,0 +1,9 @@
+#! /bin/sh
+
+input=("./release/"*)
+
+for infile in "${input[@]}"; do
+	outfile="${infile/%"in"/"out"}"
+	./challenge < "${infile}" > "${outfile}"
+	./checker "${infile}" "${outfile}" 
+done
