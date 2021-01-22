@@ -253,16 +253,35 @@ void selectMinForAll(Operation *curOperation,Job* Jobs,int *eachSend,int reqEnd,
 		tmpSlice.push_back(in_avail);
 	}
 	sort(tmpSlice.begin(),tmpSlice.end(),compSlice);
-	int maxlastT=0;
-	for(int i=tmpSlice.size()-1;i>=tmpSlice.size()-curOperation->reqSlice;i--){
-		maxlastT=(maxlastT>tmpSlice[i].lastT)?maxlastT:tmpSlice[i].lastT;
-		curOperation->usedSlice.push_back(tmpSlice[i].sID);
-        Jobs[curOperation->JobID].ops[curOperation->OpID].usedSlice.push_back(tmpSlice[i].sID);
-	}
-    for(int i=tmpSlice.size()-1;i>=tmpSlice.size()-curOperation->reqSlice;i--){
+    int maxlastT=0;
+    int start,end=0;
+    if(reqEnd>0){
+        int tar=0;
+        for(int i=0;i<tmpSlice.size();i++){
+            if(tmpSlice[i].lastT<reqEnd){
+                tar=i-1;
+                break;
+            }
+        }
+        if(tar+1>curOperation->reqSlice){
+            start=tar+1-curOperation->reqSlice;
+        }
+        maxlastT=tmpSlice[start].lastT;
+        for(int i=start;i<tar+1;i++){
+		    curOperation->usedSlice.push_back(tmpSlice[i].sID);
+            Jobs[curOperation->JobID].ops[curOperation->OpID].usedSlice.push_back(tmpSlice[i].sID);
+        }
+        end=tar+1;
+    }
+    else{
+        start=tmpSlice.size()-curOperation->reqSlice;
+        end=tmpSlice.size();
+        maxlastT=tmpSlice[start].lastT;
+    }
+	for(int i=start;i<end;i++){
         int curSlice=tmpSlice[i].sID;
-        // *lastEmptyEnd stores the latest end time of a slice (before scheduling curOperation) 
-		// update emptySlots linked list(if there is a gap) & lastEmptyEnd
+		curOperation->usedSlice.push_back(curSlice);
+        Jobs[curOperation->JobID].ops[curOperation->OpID].usedSlice.push_back(curSlice);
         if(maxlastT>lastEmptyEnd[curSlice]){
             emptySlot newSlot;
             newSlot.start = lastEmptyEnd[curSlice]; newSlot.end = maxlastT; newSlot.slice = curSlice;
@@ -509,6 +528,7 @@ int main(){
                     }
                     lastEmptyEnd[curSlice] = curOperation.endTime;
                 }
+                Jobs[i].done[curOperation.OpID] = true;
             }
         }// for other job, each time its op select min
         else{
@@ -519,21 +539,25 @@ int main(){
             }
             for(j=1;j<=Jobs[i].opNum;j++){
                 curOperation=Jobs[i].ops[Jobs[i].seq[j-1].OpID];
+                Jobs[i].ops[Jobs[i].seq[j-1].OpID].usedSlice.clear();
                 curOperation.usedSlice.clear();
                 priority_queue<Operation, vector<Operation>, samejobComp> tmpPQ;
                 if(insertBubble(emptySlots, lastEmptyEnd, Jobs, curOperation, opOrderPointers, tmpPQ) == true){
                     continue;
                 }
                 if(curOperation.reqOpNum==0){
-                    selectMinForAll(curOperation,Jobs,eachSend,curOperation.reqEndTime,sliceNum,j-1);
+                    selectMinForAll(&curOperation,Jobs,eachSend,0,sliceNum,j-1);
                     Jobs[i].done[curOperation.OpID] = true;
                     for(int si=0;si<curOperation.reqSlice;si++){
 	    	            eachSend[ curOperation.usedSlice[si] ]=curOperation.endTime;
 	                }
                 }
                 else{// for dep ops, if not enough slices reach reqEndTime, do indep op first
-                    //01.22 14:44 work to here
-                    selectMinSlice > curOperation.reqEndTime
+                    selectMinForAll(&curOperation,Jobs,eachSend,curOperation.reqEndTime,sliceNum,j-1);
+                    Jobs[i].done[curOperation.OpID] = true;
+                    for(int si=0;si<curOperation.reqSlice;si++){
+	    	            eachSend[ curOperation.usedSlice[si] ]=curOperation.endTime;
+	                }
                 }
             }
 
