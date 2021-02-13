@@ -6,6 +6,7 @@
 #include <queue>
 #include <algorithm>
 #include <stack>
+#include <list>
 
 using namespace std;
 
@@ -20,6 +21,7 @@ class Operation{
         int totalDuration;
         double jobWeight;
         int totalDep;
+	bool inWait;
         vector<int> reqOp;
         vector<int> usedSlice;
         Operation(int jobID, int opID, double jobW){
@@ -28,6 +30,7 @@ class Operation{
             jobWeight = jobW;
             totalDuration = 0;			
             reqEndTime = 0;
+	    inWait=false;
         }
 };
 
@@ -68,7 +71,7 @@ class Slice{
 			sID=sid;
 			lastT=lT;
 		}
-}
+};
 
 bool compSlice(Slice a,Slice b){
 	return (a.lastT > b.lastT);
@@ -107,6 +110,16 @@ struct endTimeComp
     bool operator()(Operation const& a, Operation const& b)
     {
         return a.endTime > b.endTime;
+    }
+};
+
+struct samejobComp
+{
+    bool operator()(Operation const& a, Operation const& b)
+    {
+        if (a.reqSlice == b.reqSlice)
+            return a.reqDuration < b.reqDuration;
+        return a.reqSlice < b.reqSlice;
     }
 };
 
@@ -188,65 +201,109 @@ bool insertBubble(list<emptySlot> &emptySlots, int *lastEmptyEnd, Job *Jobs, Ope
 		}
 		j++;
 	}
-    j = opOrderPointers[curJobID];
-    while(j < Jobs[curJobID].opNum){
-        int nextOp = Jobs[curJobID].orders[j];
-        bool available = true;
-        for(int k = 0; k < Jobs[curJobID].ops[nextOp].reqOpNum; k ++){
-            if(!Jobs[curJobID].done[ Jobs[curJobID].ops[nextOp].reqOp[k] ]){
-                available = false;
-                break;
+            j = opOrderPointers[curJobID];
+	    bool skip=false;
+            while(j < Jobs[curJobID].opNum){
+                int nextOp = Jobs[curJobID].orders[j];
+                if(Jobs[curJobID].ops[nextOp].inWait==true){
+			j++;
+			continue;
+		}
+		bool available = true;
+                for(int k = 0; k < Jobs[curJobID].ops[nextOp].reqOpNum; k ++){
+                    if(!Jobs[curJobID].done[ Jobs[curJobID].ops[nextOp].reqOp[k] ]){
+                        available = false;
+                        break;
+                    }
+                }
+                if(!available){
+			j++;
+			skip=true;
+			continue;
+		}
+
+                curOperation = Jobs[curJobID].ops[nextOp];
+                waitingPQ.push(curOperation);
+		if(skip)
+			Jobs[curJobID].ops[nextOp].inWait=true;
+		cout<<"push to waitingPQ: "<<curOperation.JobID<<" "<<curOperation.OpID<<endl;
+                j ++;
             }
-        }
-        if(!available) break;
-        curOperation = Jobs[curJobID].ops[nextOp];
-        //curOperation.reqEndTime = Jobs[curJobID].ops[curOpID].endTime;
-        waitingPQ.push(curOperation);
-        j ++;
-    }
-    opOrderPointers[curJobID] = j;
+            if(!skip)
+		    opOrderPointers[curJobID] = j;
     return true;
 }
 
-void selectMinSlice(vector<int>& availaSlice,Operation *curOperation,Job* Jobs,int *eachSend){
+void selectMinSlice(queue<int>& availaSlice,int *lastEmptyEnd,list<emptySlot>& emptySlots,Operation *curOperation,Job* Jobs,int *eachSend){
 	vector<Slice> tmpSlice;
     int availaSize=availaSlice.size();
 	for(int i=0;i<availaSize;i++){
 		Slice in_avail(availaSlice.front(),eachSend[availaSlice.front()]);
 		tmpSlice.push_back(in_avail);
-        availaSlice.pop()
+        availaSlice.pop();
 	}
 	sort(tmpSlice.begin(),tmpSlice.end(),compSlice);
-	int maxlastT=0;
-	for(int i=tmpSlice.size()-1;i>=tmpSlice.size()-curOperation->reqSlice;i--){
-		maxlastT=(maxlastT>tmpSlice[i].lastT)?maxlastT:tmpSlice[i].lastT;
-		curOperation->usedSlice.push_back(tmpSlice[i].sID);
-        Jobs[curOperation->JobID].ops[curOperation->OpID].usedSlice.push_back(tmpSlice[i].sID);
+	// for dep op, start after reqEndTime
+    int maxlastT=0;
+    int start=0,end=0;
+	int reqEnd=curOperation->reqEndTime;
+	cout<<"select jobID, opID, reqEnd "<<curOperation->JobID<<" "<<curOperation->OpID<<" "<<reqEnd<<endl;
+    	if(reqEnd>0){
+        	int tar=0;
+        	for(int i=0;i<tmpSlice.size();i++){
+			cout<<"slice id, lastT "<<tmpSlice[i].sID<<" "<<tmpSlice[i].lastT<<endl;
+            		if(tmpSlice[i].lastT<reqEnd){
+                	tar=i-1;
+                	break;
+            		}
+        	}
+
+        	if(tar+1>=curOperation->reqSlice){
+            		start=tar+1-curOperation->reqSlice;
+        		maxlastT=tmpSlice[start].lastT;
+        		end=tar+1;
+        	}
+		else{
+			start=0;
+			end=curOperation->reqSlice;
+			maxlastT=reqEnd;
+		}
+        	for(int i=start;i<end;i++){
+		    curOperation->usedSlice.push_back(tmpSlice[i].sID);
+		    Jobs[curOperation->JobID].ops[curOperation->OpID].usedSlice.push_back(tmpSlice[i].sID);
+        	}
+		cout<<"start end "<<start<<" "<<end<<endl;
+    	}
+    	else{
+        	start=tmpSlice.size()-curOperation->reqSlice;
+        	end=tmpSlice.size();
+        	maxlastT=tmpSlice[start].lastT;
+    	}
+	for(int i=start;i<end;i++){
+        	int curSlice=tmpSlice[i].sID;
+		curOperation->usedSlice.push_back(curSlice);
+        	Jobs[curOperation->JobID].ops[curOperation->OpID].usedSlice.push_back(curSlice);
+        	if(maxlastT>lastEmptyEnd[curSlice]){
+            		emptySlot newSlot;
+            		newSlot.start = lastEmptyEnd[curSlice]; newSlot.end = maxlastT; newSlot.slice = curSlice;
+            		emptySlots.push_back(newSlot);
+        	}
+        	lastEmptyEnd[curSlice] = maxlastT + curOperation->reqDuration;
 	}
-    for(int i=tmpSlice.size()-1;i>=tmpSlice.size()-curOperation->reqSlice;i--){
-        int curSlice=tmpSlice[i].sID;
-        // *lastEmptyEnd stores the latest end time of a slice (before scheduling curOperation) 
-		// update emptySlots linked list(if there is a gap) & lastEmptyEnd
-        if(maxlastT>lastEmptyEnd[curSlice]){
-            emptySlot newSlot;
-            newSlot.start = lastEmptyEnd[curSlice]; newSlot.end = maxlastT; newSlot.slice = curSlice;
-            emptySlots.push_back(newSlot);
-        }
-        lastEmptyEnd[curSlice] = maxlastT + curOperation.reqDuration;
-	}
-	for(int i=0;i<curOperation->reqSlice;i++)
-		tmpSlice.pop_back();
+	
 	for(int i=0;i<tmpSlice.size();i++){
+		if(i>=start && i<end)
+			continue;
         int curSlice=tmpSlice[i].sID;
 		availaSlice.push(curSlice);
     }
 	curOperation->startTime = maxlastT;
-    Jobs[curOperation->JobID].ops[curOperation.OpID].startTime = maxlastT;
+    Jobs[curOperation->JobID].ops[curOperation->OpID].startTime = maxlastT;
     curOperation->endTime = maxlastT + curOperation->reqDuration;
     Jobs[curOperation->JobID].ops[curOperation->OpID].endTime = curOperation->endTime;
 }
 
-void selectMinForAll(Operation *curOperation,Job* Jobs,int *eachSend,int reqEnd,int sliceNum,int index){
+void selectMinForAll(int *lastEmptyEnd,list<emptySlot>& emptySlots,Operation *curOperation,Job* Jobs,int *eachSend,int reqEnd,int sliceNum,int index){
 	vector<Slice> tmpSlice;
 	for(int i=1;i<=sliceNum;i++){
 		Slice in_avail(i,eachSend[i]);
@@ -254,7 +311,7 @@ void selectMinForAll(Operation *curOperation,Job* Jobs,int *eachSend,int reqEnd,
 	}
 	sort(tmpSlice.begin(),tmpSlice.end(),compSlice);
     int maxlastT=0;
-    int start,end=0;
+    int start=0,end=0;
     if(reqEnd>0){
         int tar=0;
         for(int i=0;i<tmpSlice.size();i++){
@@ -263,15 +320,21 @@ void selectMinForAll(Operation *curOperation,Job* Jobs,int *eachSend,int reqEnd,
                 break;
             }
         }
-        if(tar+1>curOperation->reqSlice){
-            start=tar+1-curOperation->reqSlice;
+        if(tar+1>=curOperation->reqSlice){
+            	start=tar+1-curOperation->reqSlice;
+        	maxlastT=tmpSlice[start].lastT;
+        	end=tar+1;
         }
-        maxlastT=tmpSlice[start].lastT;
-        for(int i=start;i<tar+1;i++){
-		    curOperation->usedSlice.push_back(tmpSlice[i].sID);
-            Jobs[curOperation->JobID].ops[curOperation->OpID].usedSlice.push_back(tmpSlice[i].sID);
+	else{
+		start=0;
+		end=curOperation->reqSlice;
+		maxlastT=reqEnd;
+	}
+        for(int i=start;i<end;i++){
+		curOperation->usedSlice.push_back(tmpSlice[i].sID);
+		Jobs[curOperation->JobID].ops[curOperation->OpID].usedSlice.push_back(tmpSlice[i].sID);
         }
-        end=tar+1;
+	cout<<"start end "<<start<<" "<<end<<endl;
     }
     else{
         start=tmpSlice.size()-curOperation->reqSlice;
@@ -287,7 +350,7 @@ void selectMinForAll(Operation *curOperation,Job* Jobs,int *eachSend,int reqEnd,
             newSlot.start = lastEmptyEnd[curSlice]; newSlot.end = maxlastT; newSlot.slice = curSlice;
             emptySlots.push_back(newSlot);
         }
-        lastEmptyEnd[curSlice] = maxlastT + curOperation.reqDuration;
+        lastEmptyEnd[curSlice] = maxlastT + curOperation->reqDuration;
 	}
     int curJobID=curOperation->JobID;
     int curOpID=curOperation->OpID;
@@ -300,23 +363,13 @@ void selectMinForAll(Operation *curOperation,Job* Jobs,int *eachSend,int reqEnd,
     while(j < Jobs[curJobID].opNum){
         int nextOp = Jobs[curJobID].seq[j].OpID;
         for(int k = 0; k < Jobs[curJobID].ops[nextOp].reqOpNum; k++){
-            if(Jobs[curJobID].ops[nextOp].reqOp[k] == curOpID && Jobs[curJobID].ops[nextOp].reqEndTime < curOperation.endTime){
-                Jobs[curJobID].ops[nextOp].reqEndTime = curOperation.endTime;
+            if(Jobs[curJobID].ops[nextOp].reqOp[k] == curOpID && Jobs[curJobID].ops[nextOp].reqEndTime < curOperation->endTime){
+                Jobs[curJobID].ops[nextOp].reqEndTime = curOperation->endTime;
             }
         }
         j++;
     }
 }
-
-struct samejobComp
-{
-    bool operator()(Operation const& a, Operation const& b)
-    {
-        if (a.reqSlice == b.reqSlice)
-            return a.reqDuration < b.reqDuration;
-        return a.reqSlice < b.reqSlice;
-    }
-};
 
 bool startTimeComp(Operation a,Operation b){
     if(a.startTime==b.startTime)
@@ -329,7 +382,26 @@ bool compRatio(Ratio a,Ratio b){
         return true;
     else
         return false;
-} 
+}
+
+double calcResult(Job *Jobs, int jobNum){
+    int makespan = -1, jobEndTime;
+    double result = 0;
+    for(int i = 1; i <= jobNum; i ++){
+        jobEndTime = -1;
+        for(int j = 1; j <= Jobs[i].opNum; j ++){
+            if(Jobs[i].ops[j].endTime > jobEndTime){
+                jobEndTime = Jobs[i].ops[j].endTime;
+            }
+        }
+        if(jobEndTime > makespan){
+            makespan = jobEndTime;
+        }
+        result += jobEndTime * Jobs[i].weight;
+    }
+    result += makespan;
+    return result;
+}
 
 int main(){
     int sliceNum, jobNum, reqOpID, totalOpNum = 0, doneOpNum = 0;
@@ -388,16 +460,17 @@ int main(){
     }
     
     int JobfinTime[jobNum+1];
-    int eachSend[jobNum+1];
+    int eachSend[sliceNum+1];
     for (int l = 1;l <= jobNum;l ++){
         JobfinTime[l]=0;
-        T = 0;
         availaSlice = queue<int>();
         for(int i = 1; i <= sliceNum; i ++){
             availaSlice.push(i);
             lastEmptyEnd[i] = 0;
             eachSend[i]=0;
         }
+	emptySlots.clear();
+
         while(jdoneOpNum[l] < Jobs[l].opNum){
             while(!availaSlice.empty() && !waitingPQ[l].empty()){ // step 2
                 // look for empty slice
@@ -405,14 +478,15 @@ int main(){
                     jdoneOpNum[l] ++;
                     Jobs[l].seq.push_back(Jobs[l].ops[waitingPQ[l].top().OpID]);
                     waitingPQ[l].pop();
+		    cout<<"insert jobID "<<waitingPQ[l].top().JobID<<" OpID "<<waitingPQ[l].top().OpID<<endl;
                     continue;
                 }
-                
+                cout<<"try insert"<<endl;
                 if(waitingPQ[l].top().reqSlice > availaSlice.size()){
 			        vector<Operation> tmpWait;
 		            tmpWait.clear();
                     while(!waitingPQ[l].empty()){
-				        if(watingPQ[l].top().reqSlice > availaSlice.size()){
+				        if(waitingPQ[l].top().reqSlice > availaSlice.size()){
 					        Operation topWait=waitingPQ[l].top();
 					        waitingPQ[l].pop();
 					        tmpWait.push_back(topWait);
@@ -420,8 +494,11 @@ int main(){
 				        else
 					        break;
 			        }
+		    if(!waitingPQ[l].empty()){
 			        curOperation=waitingPQ[l].top();
 			        waitingPQ[l].pop();
+		    }
+
 			        for(int wv=0;wv<tmpWait.size();wv++){
 				        waitingPQ[l].push(tmpWait[wv]);
 			        }
@@ -430,13 +507,15 @@ int main(){
                 	curOperation = waitingPQ[l].top();
                 	waitingPQ[l].pop();
 		        }
-		
+			cout<<"before select"<<endl;
 		        //select those with minimum average, not those with minimum difference
-		        selectMinSlice(availaSlice,&curOperation,&Jobs,eachSend);
+		        selectMinSlice(availaSlice,lastEmptyEnd,emptySlots,&curOperation,Jobs,eachSend);
+			cout<<"after select"<<endl;
+		cout<<"push to work, JobID "<<curOperation.JobID<<" OpID "<<curOperation.OpID<<" startTime "<<curOperation.startTime<<" endTime "<<curOperation.endTime<<endl;
                 workingPQ[l].push(curOperation);
             }
             // process op in the workingPQ, no need insertBubble
-	        curOperation = workingPQ.top(); // step 3: get the first job in workingPQ done and get available slices
+	        curOperation = workingPQ[l].top(); // step 3: get the first job in workingPQ done and get available slices
             Jobs[l].seq.push_back(curOperation);
             workingPQ[l].pop();
             jdoneOpNum[l] ++;
@@ -446,7 +525,7 @@ int main(){
             for(int si=0;si<curOperation.reqSlice;si++){
 	    	    eachSend[ curOperation.usedSlice[si] ]=curOperation.endTime;
                 availaSlice.push(curOperation.usedSlice[si]);
-                printf("slice %d is available\n", curOperation.usedSlice[i]);
+                printf("slice %d is available, JobID %d, OpID %d\n", curOperation.usedSlice[si],curOperation.JobID,curOperation.OpID);
 	        }
 	        JobfinTime[l]=(JobfinTime[l]>curOperation.endTime)?JobfinTime[l]:curOperation.endTime;
             
@@ -461,23 +540,40 @@ int main(){
 		        }
 		        j++;
 	        }
-
+		cout<<"update fault?"<<endl;
             j = opOrderPointers[curJobID];
+	    bool skip=false;
             while(j < Jobs[curJobID].opNum){
                 int nextOp = Jobs[curJobID].orders[j];
-                bool available = true;
+		cout<<"nextOp "<<nextOp<<endl;
+                if(Jobs[curJobID].ops[nextOp].inWait==true){
+			j++;
+			continue;
+		}
+		bool available = true;
                 for(int k = 0; k < Jobs[curJobID].ops[nextOp].reqOpNum; k ++){
                     if(!Jobs[curJobID].done[ Jobs[curJobID].ops[nextOp].reqOp[k] ]){
                         available = false;
                         break;
                     }
                 }
-                if(!available) break;
+                if(!available){
+			j++;
+			skip=true;
+			cout<<"not avail"<<endl;
+			continue;
+		}
+
                 curOperation = Jobs[curJobID].ops[nextOp];
                 waitingPQ[l].push(curOperation);
+		if(skip)
+			Jobs[curJobID].ops[nextOp].inWait=true;
+		cout<<"push to waitingPQ: "<<curOperation.JobID<<" "<<curOperation.OpID<<endl;
                 j ++;
             }
-            opOrderPointers[curJobID] = j;
+            if(!skip)
+		    opOrderPointers[curJobID] = j;
+	    cout<<"push to PQ fault ?"<<endl;
         }
 	    //what time ?
         cout<<"jobID "<<l<<" time "<<JobfinTime[l]<<endl;
@@ -494,7 +590,6 @@ int main(){
         cout<<"ID "<<orderJob[i].ID<<" ratio "<<orderJob[i].ratio<<endl;
     }
 
-    int eachSend[sliceNum+1];
     for(int i=0;i<=sliceNum;i++){
 	    eachSend[i]=0;
         lastEmptyEnd[i]=0;
@@ -517,9 +612,9 @@ int main(){
     for(int i=1;i<=jobNum;i++){
         // for first job, use preserved seq and other data
         if(i==1){
-            for(j=1;j<=Jobs[i].opNum;j++){
+            for(int j=1;j<=Jobs[i].opNum;j++){
                 curOperation=Jobs[i].seq[j-1];
-                for(k=0;k<curOperation.reqSlice;k++){
+                for(int k=0;k<curOperation.reqSlice;k++){
                     curSlice=curOperation.usedSlice[k];
                     eachSend[curSlice]=curOperation.endTime;
                     if(curOperation.startTime>lastEmptyEnd[curSlice]){
@@ -534,10 +629,10 @@ int main(){
         else{
             // data need clear and init
             opOrderPointers[i]=0;
-            for(j=1;j<=Jobs[i].opNum;j++){
+            for(int j=1;j<=Jobs[i].opNum;j++){
                 Jobs[i].ops[j].reqEndTime=0;
             }
-            for(j=1;j<=Jobs[i].opNum;j++){
+            for(int j=1;j<=Jobs[i].opNum;j++){
                 curOperation=Jobs[i].ops[Jobs[i].seq[j-1].OpID];
                 Jobs[i].ops[Jobs[i].seq[j-1].OpID].usedSlice.clear();
                 curOperation.usedSlice.clear();
@@ -546,14 +641,14 @@ int main(){
                     continue;
                 }
                 if(curOperation.reqOpNum==0){
-                    selectMinForAll(&curOperation,Jobs,eachSend,0,sliceNum,j-1);
+                    selectMinForAll(lastEmptyEnd,emptySlots,&curOperation,Jobs,eachSend,0,sliceNum,j-1);
                     Jobs[i].done[curOperation.OpID] = true;
                     for(int si=0;si<curOperation.reqSlice;si++){
 	    	            eachSend[ curOperation.usedSlice[si] ]=curOperation.endTime;
 	                }
                 }
                 else{// for dep ops, if not enough slices reach reqEndTime, do indep op first
-                    selectMinForAll(&curOperation,Jobs,eachSend,curOperation.reqEndTime,sliceNum,j-1);
+                    selectMinForAll(lastEmptyEnd,emptySlots,&curOperation,Jobs,eachSend,curOperation.reqEndTime,sliceNum,j-1);
                     Jobs[i].done[curOperation.OpID] = true;
                     for(int si=0;si<curOperation.reqSlice;si++){
 	    	            eachSend[ curOperation.usedSlice[si] ]=curOperation.endTime;
@@ -565,15 +660,18 @@ int main(){
     }
 
 
-
-    /*for(int i = 1; i <= jobNum; i ++){
+    cout<<"finish process"<<endl;
+    for(int i = 1; i <= jobNum; i ++){
         for(int j = 1; j <= Jobs[i].opNum; j ++){
-            printf("%d", Jobs[i].ops[j].startTime);
+            cout<<i<<" "<<j<<endl;
+		printf("%d", Jobs[i].ops[j].startTime);
             for(int k = 0; k < Jobs[i].ops[j].reqSlice; k ++)
                 printf(" %d", Jobs[i].ops[j].usedSlice[k]);
             printf("\n");
         }
-    }*/
+    }
+
+    printf("%.8f\n",calcResult(Jobs,jobNum));
 
     return 0;
 }
